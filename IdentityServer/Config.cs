@@ -17,16 +17,25 @@ public static class Config
                 displayName: "Account Information",
                 userClaims: new[] 
                 { 
-                    "account_id", 
-                    "tenant_id", 
-                    "tenant_name", 
-                    "tenant_slug",
-                    "tenant_type",
-                    "account_name",
-                    "role",
-                    "permission",
+                    "account_id",
+                    "account_version",
                     "available_accounts"
                 })
+        };
+
+    // API Resources define the APIs in your system and their audiences
+    public static IEnumerable<ApiResource> ApiResources =>
+        new ApiResource[]
+        {
+            new ApiResource("talabat.api", "Talabat API")
+            {
+                Scopes = { "talabat.api" },
+                UserClaims = { "account_id", "account_version" }
+            },
+            new ApiResource("identity.api", "Identity Server API")
+            {
+                Scopes = { "users.read" }
+            }
         };
 
     public static IEnumerable<ApiScope> ApiScopes =>
@@ -35,8 +44,10 @@ public static class Config
             // Unified Talabat API scope (serves shop, customer, and admin operations)
             new ApiScope("talabat.api", "Talabat API")
             {
-                UserClaims = { "account_id", "tenant_id", "tenant_type", "role", "permission" }
-            }
+                UserClaims = { "account_id", "account_version" }
+            },
+            // Scope for reading users list from Identity Server
+            new ApiScope("users.read", "Read Users")
         };
 
     // Custom grant type for token exchange (RFC 8693)
@@ -45,16 +56,6 @@ public static class Config
     public static IEnumerable<Client> Clients =>
         new Client[]
         {
-            // Machine-to-machine client (for internal services)
-            new Client
-            {
-                ClientId = "m2m.internal",
-                ClientName = "Internal Services",
-                AllowedGrantTypes = GrantTypes.ClientCredentials,
-                ClientSecrets = { new Secret("511536EF-F270-4058-80CA-1C89C192F69A".Sha256()) },
-                AllowedScopes = { "talabat.api" }
-            },
-
             // Talabat Web Application (unified client for customer, shop, admin)
             new Client
             {
@@ -90,6 +91,64 @@ public static class Config
                 RefreshTokenExpiration = TokenExpiration.Sliding,
                 SlidingRefreshTokenLifetime = 86400, // 24 hours
                 AbsoluteRefreshTokenLifetime = 86400 * 7 // Max 7 days
+            },
+            new Client
+            {
+                ClientId = "talabat.admin",
+                ClientName = "Talabat Admin Application",
+                ClientSecrets = { new Secret("49C1A7E1-0C79-4A89-A3D6-A37998FB86B0".Sha256()) },
+
+                AllowedGrantTypes = GrantTypes.CodeAndClientCredentials
+                    .Append(TokenExchangeGrantType).ToList(),
+                RequirePkce = true,
+
+                // Include both URIs - port 4200 (Angular dev) and port 7082 (BFF)
+                RedirectUris =
+                {
+                    "https://localhost:7082/signin-oidc",
+                    "https://localhost:4200/signin-oidc"
+                },
+                PostLogoutRedirectUris =
+                {
+                    "https://localhost:7082/signout-callback-oidc",
+                    "https://localhost:4200/signout-callback-oidc"
+                },
+
+                BackChannelLogoutUri = "https://localhost:7082/bff/backchannel",
+                BackChannelLogoutSessionRequired = true,
+
+                AllowOfflineAccess = true,
+                AllowedScopes =
+                {
+                    IdentityServerConstants.StandardScopes.OpenId,
+                    IdentityServerConstants.StandardScopes.Profile,
+                    IdentityServerConstants.StandardScopes.Email,
+                    IdentityServerConstants.StandardScopes.OfflineAccess,
+                    "account",
+                    "talabat.api"
+                },
+
+                // Token lifetime - shorter access tokens, 24h refresh with rotation
+                AccessTokenLifetime = 900, // 15 minutes
+                RefreshTokenUsage = TokenUsage.OneTimeOnly, // Rotation on each refresh
+                RefreshTokenExpiration = TokenExpiration.Sliding,
+                SlidingRefreshTokenLifetime = 86400, // 24 hours
+                AbsoluteRefreshTokenLifetime = 86400 * 7 // Max 7 days
+            },
+
+            // API Server - machine-to-machine client for user validation
+            new Client
+            {
+                ClientId = "talabat.api.server",
+                ClientName = "Talabat API Server",
+                ClientSecrets = { new Secret("B5A3C8E2-1F47-4D6B-9E8A-7C2D5F1A3B09".Sha256()) },
+
+                AllowedGrantTypes = GrantTypes.ClientCredentials,
+
+                AllowedScopes =
+                {
+                    "users.read"
+                }
             },
 
             // Swagger UI client (for API documentation/testing)

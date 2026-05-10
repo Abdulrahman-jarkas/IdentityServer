@@ -1,0 +1,62 @@
+@page
+@model IdentityServer.Pages.Register.Index
+
+<div class="register-page">
+    <div class="lead">
+        <h1>Register</h1>
+        <p>Create a new account</p>
+    </div>
+
+    <partial name="_ValidationSummary" />
+
+    <div class="row">
+        <div class="col-sm-6">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Create Account</h2>
+                </div>
+
+                <div class="card-body">
+                    <form asp-page="/Account/Register/Index" method="post">
+                        <input type="hidden" asp-for="Input.ReturnUrl" />
+
+                        <div class="form-group">
+                            <label asp-for="Input.Email"></label>
+                            <input class="form-control" placeholder="Email" asp-for="Input.Email" autofocus>
+                            <span asp-validation-for="Input.Email" class="text-danger"></span>
+                        </div>
+                        <div class="form-group">
+                            <label asp-for="Input.FirstName"></label>
+                            <input class="form-control" placeholder="First Name" asp-for="Input.FirstName">
+                            <span asp-validation-for="Input.FirstName" class="text-danger"></span>
+                        </div>
+                        <div class="form-group">
+                            <label asp-for="Input.LastName"></label>
+                            <input class="form-control" placeholder="Last Name" asp-for="Input.LastName">
+                            <span asp-validation-for="Input.LastName" class="text-danger"></span>
+                        </div>
+                        <div class="form-group">
+                            <label asp-for="Input.Password"></label>
+                            <input type="password" class="form-control" placeholder="Password" asp-for="Input.Password" autocomplete="new-password">
+                            <span asp-validation-for="Input.Password" class="text-danger"></span>
+                        </div>
+                        <div class="form-group">
+                            <label asp-for="Input.ConfirmPassword"></label>
+                            <input type="password" class="form-control" placeholder="Confirm Password" asp-for="Input.ConfirmPassword" autocomplete="new-password">
+                            <span asp-validation-for="Input.ConfirmPassword" class="text-danger"></span>
+                        </div>
+
+                        <button class="btn btn-primary" type="submit">Register</button>
+                        <a class="btn btn-secondary" asp-page="/Account/Login/Index" asp-route-returnUrl="@Model.Input.ReturnUrl">Cancel</a>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-3">
+        <div class="col-sm-6">
+            <p>Already have an account? <a asp-page="/Account/Login/Index" asp-route-returnUrl="@Model.Input.ReturnUrl">Login</a></p>
+        </div>
+    </div>
+</div>

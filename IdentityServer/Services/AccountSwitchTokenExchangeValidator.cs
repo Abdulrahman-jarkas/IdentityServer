@@ -1,10 +1,7 @@
 using Duende.IdentityServer.Models;
 using Duende.IdentityServer.Validation;
-using IdentityServer.Data;
-using IdentityServer.Data.Entities;
 using IdentityServer.Models;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -13,24 +10,14 @@ namespace IdentityServer.Services;
 
 /// <summary>
 /// Extension grant validator for RFC 8693 Token Exchange with account switching.
-/// 
-/// Token validation is delegated to Duende's ITokenValidator which handles:
-/// - Signature validation
-/// - Token expiration
-/// - Issuer validation
-/// - Audience validation
-/// 
-/// We add:
-/// - User lockout validation
-/// - Account status validation
-/// - Security stamp validation
-/// - Account claims building
+/// BFF server passes account_id + account_version (obtained from Talabat API).
+/// IS trusts the BFF (confidential client with client_secret) and stamps the claims.
+/// Talabat API enforces account ownership on every request.
 /// </summary>
 public class AccountSwitchTokenExchangeValidator : IExtensionGrantValidator
 {
     private readonly ITokenValidator _tokenValidator;
     private readonly UserManager<ApplicationUser> _userManager;
-    private readonly ApplicationDbContext _db;
     private readonly ILogger<AccountSwitchTokenExchangeValidator> _logger;
 
     public string GrantType => "urn:ietf:params:oauth:grant-type:token-exchange";
@@ -38,12 +25,10 @@ public class AccountSwitchTokenExchangeValidator : IExtensionGrantValidator
     public AccountSwitchTokenExchangeValidator(
         ITokenValidator tokenValidator,
         UserManager<ApplicationUser> userManager,
-        ApplicationDbContext db,
         ILogger<AccountSwitchTokenExchangeValidator> logger)
     {
         _tokenValidator = tokenValidator;
         _userManager = userManager;
-        _db = db;
         _logger = logger;
     }
 
@@ -61,13 +46,12 @@ public class AccountSwitchTokenExchangeValidator : IExtensionGrantValidator
 
         if (subjectTokenType != "urn:ietf:params:oauth:token-type:access_token")
         {
-            context.Result = new GrantValidationResult(TokenRequestErrors.InvalidRequest, 
+            context.Result = new GrantValidationResult(TokenRequestErrors.InvalidRequest,
                 "subject_token_type must be urn:ietf:params:oauth:token-type:access_token");
             return;
         }
 
-        // === Step 2: Delegate token validation to Duende's ITokenValidator ===
-        // This handles: signature, expiration, issuer, audience, token type validation
+        // === Step 2: Validate the subject token ===
         var tokenValidationResult = await _tokenValidator.ValidateAccessTokenAsync(subjectToken);
 
         if (tokenValidationResult.IsError)
@@ -77,7 +61,7 @@ public class AccountSwitchTokenExchangeValidator : IExtensionGrantValidator
             return;
         }
 
-        // === Step 3: Extract user identity from validated token ===
+        // === Step 3: Extract user identity ===
         var userId = tokenValidationResult.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
         if (string.IsNullOrEmpty(userId))
         {
@@ -85,62 +69,60 @@ public class AccountSwitchTokenExchangeValidator : IExtensionGrantValidator
             return;
         }
 
-        // === Step 4: Validate User is not locked ===
+        // === Step 4: Validate user is not locked ===
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
         {
-            _logger.LogWarning("Token exchange failed: user {UserId} not found", userId);
             context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant, "user not found");
             return;
         }
 
         if (await _userManager.IsLockedOutAsync(user))
         {
-            _logger.LogWarning("Token exchange failed: user {UserId} is locked out", userId);
             context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant, "user is locked");
             return;
         }
 
-        // === Step 5: Validate account_id (required parameter) ===
+        // Validate user security stamp
+        var tokenUserStamp = tokenValidationResult.Claims.FirstOrDefault(c => c.Type == "user_stamp")?.Value;
+        if (!string.IsNullOrEmpty(tokenUserStamp))
+        {
+            var currentStampHash = HashSecurityStamp(user.SecurityStamp ?? string.Empty);
+            if (tokenUserStamp != currentStampHash)
+            {
+                _logger.LogWarning("User {UserId} security stamp mismatch", userId);
+                context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant, "security stamp mismatch");
+                return;
+            }
+        }
+
+        // === Step 5: Validate account_id parameter ===
         var targetAccountId = context.Request.Raw.Get("account_id");
 
-        if (string.IsNullOrEmpty(targetAccountId))
+        if (string.IsNullOrEmpty(targetAccountId) || !Guid.TryParse(targetAccountId, out var accountId))
         {
-            context.Result = new GrantValidationResult(TokenRequestErrors.InvalidRequest, "account_id is required");
+            context.Result = new GrantValidationResult(TokenRequestErrors.InvalidRequest, "account_id is required and must be a valid GUID");
             return;
         }
 
-        if (!Guid.TryParse(targetAccountId, out var accountId))
+        // === Step 6: Validate account_version parameter ===
+        var targetAccountVersion = context.Request.Raw.Get("account_version");
+
+        if (string.IsNullOrEmpty(targetAccountVersion))
         {
-            context.Result = new GrantValidationResult(TokenRequestErrors.InvalidRequest, "account_id must be a valid GUID");
+            context.Result = new GrantValidationResult(TokenRequestErrors.InvalidRequest, "account_version is required");
             return;
         }
 
-        var account = await _db.Accounts
-            .Include(a => a.AccountRoles)
-                .ThenInclude(ar => ar.Role)
-            .FirstOrDefaultAsync(a => a.Id == accountId && a.UserId == userId);
-
-        if (account == null)
-        {
-            _logger.LogWarning("Token exchange failed: account {AccountId} not found for user {UserId}", accountId, userId);
-            context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant, "account not found");
-            return;
-        }
-
-        // === Step 6: Verify account is active ===
-        if (account.Status != AccountStatus.Active)
-        {
-            _logger.LogWarning("Token exchange failed: account {AccountId} is not active", account.Id);
-            context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant, "account is not active");
-            return;
-        }
-
-        _logger.LogInformation("Token exchange: user {UserId} using account {AccountId} ({TenantType})", 
-            userId, account.Id, account.TenantType);
+        _logger.LogInformation("Token exchange: user {UserId} switching to account {AccountId} v{Version}",
+            userId, accountId, targetAccountVersion);
 
         // === Step 7: Build claims and return success ===
-        var claims = BuildAccountClaims(account, user);
+        var claims = new List<Claim>
+        {
+            new("account_id", accountId.ToString()),
+            new("account_version", targetAccountVersion)
+        };
 
         context.Result = new GrantValidationResult(
             subject: userId,
@@ -149,50 +131,6 @@ public class AccountSwitchTokenExchangeValidator : IExtensionGrantValidator
         );
     }
 
-    private static List<Claim> BuildAccountClaims(Account account, ApplicationUser user)
-    {
-        var claims = new List<Claim>
-        {
-            new Claim("account_id", account.Id.ToString()),
-            new Claim("tenant_id", account.TenantId?.ToString() ?? string.Empty),
-            new Claim("tenant_type", account.TenantType.ToString().ToLowerInvariant()),
-            // Security stamps for validation on refresh
-            new Claim("user_stamp", HashSecurityStamp(user.SecurityStamp ?? string.Empty)),
-            new Claim("account_stamp", HashSecurityStamp(account.SecurityStamp))
-        };
-
-        if (!string.IsNullOrEmpty(account.DisplayName))
-        {
-            claims.Add(new Claim("account_name", account.DisplayName));
-        }
-
-        // Add role claims
-        var roles = account.AccountRoles
-            .Where(ar => ar.Role != null)
-            .Select(ar => ar.Role!)
-            .ToList();
-
-        foreach (var role in roles)
-        {
-            claims.Add(new Claim("role", role.Name));
-        }
-
-        // Add permission claims
-        var permissions = roles
-            .SelectMany(r => r.GetPermissions())
-            .Distinct();
-
-        foreach (var permission in permissions)
-        {
-            claims.Add(new Claim("permission", permission));
-        }
-
-        return claims;
-    }
-
-    /// <summary>
-    /// Creates a short hash of the security stamp for token inclusion.
-    /// </summary>
     private static string HashSecurityStamp(string securityStamp)
     {
         if (string.IsNullOrEmpty(securityStamp))

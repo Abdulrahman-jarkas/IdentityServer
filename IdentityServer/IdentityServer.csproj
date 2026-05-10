@@ -27,7 +27,8 @@
 	</ItemGroup>
 
 	<ItemGroup>
-	  <Folder Include="Api\Controllers\Platform\" />
 	  <Folder Include="Api\Models\Responses\" />
+	  <Folder Include="Authorization\Handlers\" />
+	  <Folder Include="Data\Entities\" />
 	</ItemGroup>
 </Project>

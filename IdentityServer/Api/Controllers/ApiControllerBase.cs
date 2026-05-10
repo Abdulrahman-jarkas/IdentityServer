@@ -1,6 +1,4 @@
 using IdentityServer.Api.Models;
-using IdentityServer.Authorization;
-using IdentityServer.Data.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -16,13 +14,6 @@ namespace IdentityServer.Api.Controllers;
 [Produces("application/json")]
 public abstract class ApiControllerBase : ControllerBase
 {
-    protected ITenantContext TenantContext { get; }
-
-    protected ApiControllerBase(ITenantContext tenantContext)
-    {
-        TenantContext = tenantContext;
-    }
-
     protected ActionResult Forbidden(string message) =>
         StatusCode(403, new ApiError { Error = "Forbidden", Detail = message });
 
@@ -36,22 +27,7 @@ public abstract class ApiControllerBase : ControllerBase
         StatusCode(409, new ApiError { Error = "Conflict", Detail = message });
 
     /// <summary>
-    /// Current user's tenant type.
+    /// Current user's ID from the sub claim.
     /// </summary>
-    protected TenantType? CurrentTenantType => TenantContext.CurrentTenantType;
-
-    /// <summary>
-    /// Current user's tenant ID (null for Customer/System).
-    /// </summary>
-    protected Guid? CurrentTenantId => TenantContext.CurrentTenantId;
-
-    /// <summary>
-    /// Current user's account ID.
-    /// </summary>
-    protected Guid? CurrentAccountId => TenantContext.CurrentAccountId;
-
-    /// <summary>
-    /// Current user's ID.
-    /// </summary>
-    protected string? CurrentUserId => TenantContext.CurrentUserId;
+    protected string? CurrentUserId => User.FindFirst("sub")?.Value;
 }

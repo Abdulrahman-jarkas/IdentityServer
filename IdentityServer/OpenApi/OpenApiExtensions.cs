@@ -1,5 +1,4 @@
 using System.Reflection;
-using IdentityServer.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
@@ -148,7 +147,6 @@ public class AuthorizeOperationFilter : IOperationFilter
         var allAttributes = methodAttributes.Concat(controllerAttributes);
 
         var hasAuthorize = allAttributes.OfType<AuthorizeAttribute>().Any();
-        var hasRequirePermission = allAttributes.OfType<RequirePermissionAttribute>().Any();
         var hasAllowAnonymous = allAttributes.OfType<AllowAnonymousAttribute>().Any();
 
         if (hasAllowAnonymous)
@@ -156,7 +154,7 @@ public class AuthorizeOperationFilter : IOperationFilter
             return;
         }
 
-        if (hasAuthorize || hasRequirePermission)
+        if (hasAuthorize)
         {
             // Add 401 and 403 responses
             operation.Responses.TryAdd("401", new OpenApiResponse { Description = "Unauthorized" });
@@ -185,26 +183,13 @@ public class AuthorizeOperationFilter : IOperationFilter
             {
                 new OpenApiSecurityRequirement
                 {
-                    [oauth2Scheme] = new[] { "openid", "profile", "account", "platform.api", "shop.api" }
+                    [oauth2Scheme] = new[] { "openid", "profile", "account", "talabat.api" }
                 },
                 new OpenApiSecurityRequirement
                 {
                     [bearerScheme] = Array.Empty<string>()
                 }
             };
-
-            // Add permission info to description if [RequirePermission] is used
-            var requiredPermissions = allAttributes
-                .OfType<RequirePermissionAttribute>()
-                .Select(a => a.Policy?.Replace("Permission:", "") ?? "")
-                .Where(p => !string.IsNullOrEmpty(p))
-                .ToList();
-
-            if (requiredPermissions.Any())
-            {
-                var permissionText = $"\n\n**Required Permission(s):** `{string.Join("`, `", requiredPermissions)}`";
-                operation.Description = (operation.Description ?? "") + permissionText;
-            }
         }
     }
 }

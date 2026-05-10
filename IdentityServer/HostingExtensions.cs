@@ -1,6 +1,4 @@
 using Duende.IdentityServer;
-using IdentityServer.Authorization;
-using IdentityServer.Authorization.Handlers;
 using IdentityServer.Data;
 using IdentityServer.Models;
 using IdentityServer.OpenApi;
@@ -27,10 +25,10 @@ internal static class HostingExtensions
         // Add OpenAPI/Swagger with OAuth2 authentication
         builder.Services.AddOpenApiWithAuth(builder.Configuration);
 
-        // Add HttpContextAccessor for TenantContext
+        // Add HttpContextAccessor
         builder.Services.AddHttpContextAccessor();
 
-        // Application database (ASP.NET Identity + custom entities)
+        // Application database (ASP.NET Identity only)
         builder.Services.AddDbContext<ApplicationDbContext>(options =>
             options.UseSqlServer(connectionString));
 
@@ -51,11 +49,12 @@ internal static class HostingExtensions
 
                 options.EmitStaticAudienceClaim = true;
 
-                // Disable automatic key management (use your own certificate in production)
+                // Disable automatic key management - we use AddDeveloperSigningCredential instead
                 options.KeyManagement.Enabled = false;
             })
             // Clients, resources, scopes in memory (as requested)
             .AddInMemoryIdentityResources(Config.IdentityResources)
+            .AddInMemoryApiResources(Config.ApiResources)
             .AddInMemoryApiScopes(Config.ApiScopes)
             .AddInMemoryClients(Config.Clients)
             // ASP.NET Identity integration
@@ -71,25 +70,14 @@ internal static class HostingExtensions
                 options.EnableTokenCleanup = true;
                 options.TokenCleanupInterval = 3600; // 1 hour
             })
-            // Custom profile service to add account/role/permission claims
+            // Custom profile service (two-phase: login without account, exchange to set account)
             .AddProfileService<CustomProfileService>()
             // Token exchange grant for account switching (RFC 8693)
-            // Delegates token validation to Duende's ITokenValidator
             .AddExtensionGrantValidator<AccountSwitchTokenExchangeValidator>()
-            // Developer signing credential (replace with real certificate in production)
-            .AddDeveloperSigningCredential();
+            // Development signing credential - creates persistent key in tempkey.jwk
+            .AddDeveloperSigningCredential(persistKey: true, filename: "tempkey.jwk");
 
-        // Register custom services
-        builder.Services.AddScoped<IAccountService, AccountService>();
-
-        // Register authorization services
-        builder.Services.AddScoped<ITenantContext, TenantContext>();
-        builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
-
-        // Register dynamic permission policy provider for [RequirePermission] attribute
-        builder.Services.AddPermissionPolicies();
-
-        // Configure authorization - default policy requires authenticated user
+        // Configure authorization
         builder.Services.AddAuthorization(options =>
         {
             options.DefaultPolicy = new AuthorizationPolicyBuilder()
@@ -105,13 +93,9 @@ internal static class HostingExtensions
                 options.ClientId = builder.Configuration["Authentication:Google:ClientId"] ?? "not-configured";
                 options.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"] ?? "not-configured";
             })
-            // Add local API authentication for Bearer token validation
-            // Uses Duende's internal ITokenValidator for efficient, secure token validation
-            .AddLocalApi(IdentityServerConstants.LocalApi.AuthenticationScheme, options =>
+            .AddLocalApi("IdentityServerAccessToken", options =>
             {
-                options.ExpectedScope = "openid";
-                // Reduce clock skew from default 5 minutes
-                // Set to TimeSpan.Zero for exact expiration (testing only)
+                options.ExpectedScope = "users.read";
             });
 
         return builder.Build();
